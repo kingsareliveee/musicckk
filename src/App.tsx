@@ -92,7 +92,7 @@ function AppInner() {
     }
   }, [user]);
 
-  // Check if logged in user has preferences
+  // Check if logged in user has completed onboarding
   useEffect(() => {
     if (loading) return;
     if (!user) {
@@ -104,19 +104,48 @@ function AppInner() {
     const checkPreferences = async () => {
       setCheckingOnboarding(true);
       try {
-        const { data, error } = await supabase
+        // 1. Fast check: auth user metadata or local storage flag
+        const isLocallyCompleted = localStorage.getItem(`musick-onboarding-completed-${user.id}`);
+        if (isLocallyCompleted === 'true' || user.user_metadata?.onboarding_completed) {
+          setNeedsOnboarding(false);
+          setCheckingOnboarding(false);
+          return;
+        }
+
+        // 2. Database check: profiles table onboarding_completed flag
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("onboarding_completed")
+          .eq("id", user.id)
+          .single();
+
+        if (profile?.onboarding_completed) {
+          try {
+            localStorage.setItem(`musick-onboarding-completed-${user.id}`, 'true');
+          } catch {}
+          setNeedsOnboarding(false);
+          setCheckingOnboarding(false);
+          return;
+        }
+
+        // 3. Fallback: check artist_preferences table
+        const { data } = await supabase
           .from("artist_preferences")
           .select("id")
           .eq("user_id", user.id)
           .limit(1);
 
-        if (!error && (!data || data.length === 0)) {
-          setNeedsOnboarding(true);
-        } else {
+        if (data && data.length > 0) {
+          try {
+            localStorage.setItem(`musick-onboarding-completed-${user.id}`, 'true');
+          } catch {}
           setNeedsOnboarding(false);
+        } else {
+          setNeedsOnboarding(true);
         }
       } catch (err) {
         console.error("Failed to check onboarding state:", err);
+        setNeedsOnboarding(false);
       } finally {
         setCheckingOnboarding(false);
       }

@@ -199,10 +199,11 @@ export const OnboardingTastePicker: React.FC<{ onComplete: () => void }> = ({
     setSubmitting(true);
 
     try {
-      // 1. Update Display Name in Supabase Auth Metadata instead of profiles table
+      // 1. Update Display Name and onboarding_completed flag in Supabase Auth Metadata
       const { error: profileError } = await supabase.auth.updateUser({
         data: {
           full_name: displayName,
+          onboarding_completed: true,
         }
       });
 
@@ -210,7 +211,17 @@ export const OnboardingTastePicker: React.FC<{ onComplete: () => void }> = ({
         console.error("Auth metadata update error:", profileError);
       }
 
-      // 2. Save Artist Preferences (omitting missing columns: genre, language, created_at)
+      // 2. Upsert profile with onboarding_completed flag
+      try {
+        await supabase.from("profiles").upsert({
+          id: user.id,
+          onboarding_completed: true,
+        }, { onConflict: 'id' });
+      } catch (pErr) {
+        console.error("Profile onboarding flag upsert error:", pErr);
+      }
+
+      // 3. Save Artist Preferences
       const artistPayload = selectedArtists.map((a) => ({
         user_id: user.id,
         artist_name: a.name,
@@ -224,7 +235,7 @@ export const OnboardingTastePicker: React.FC<{ onComplete: () => void }> = ({
         console.error("Artist preferences save error:", artistError);
       }
 
-      // 3. Save User Settings (omitting missing column: hq_audio)
+      // 4. Save User Settings
       const { error: settingsError } = await supabase
         .from("user_settings")
         .upsert({
@@ -237,8 +248,9 @@ export const OnboardingTastePicker: React.FC<{ onComplete: () => void }> = ({
         console.error("Settings update error:", settingsError);
       }
 
-      // Store explicit_content and hq_audio preference locally since they are not in the schema
+      // Store preferences and permanent completion flag in localStorage
       try {
+        localStorage.setItem(`musick-onboarding-completed-${user.id}`, 'true');
         localStorage.setItem('musick-explicit-content', String(explicitContent));
         localStorage.setItem('musick-hq-audio', String(highQuality));
         localStorage.setItem('musick-pref-artists', selectedArtists.map(a => a.name).join(','));

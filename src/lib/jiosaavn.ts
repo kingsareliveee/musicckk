@@ -240,20 +240,64 @@ export async function getPlaylistById(id: string): Promise<{
 }
 
 export async function getPopularSongs(): Promise<Song[]> {
-  const queries = ["trending songs", "top hindi songs", "viral hits"];
-  const batches = await Promise.all(queries.map((q) => searchSongs(q, 12)));
-  const merged = batches.flat();
-  const seen = new Set<string>();
-  const unique: Song[] = [];
+  try {
+    // 1. Fetch official Top 50 Chart Playlists from API
+    const chartPlaylists = await searchPlaylists("India Superhits Top 50", 3);
+    let songsList: Song[] = [];
 
-  for (const song of merged) {
-    if (!song.videoId || seen.has(song.videoId)) continue;
-    seen.add(song.videoId);
-    unique.push(song);
-    if (unique.length >= 20) break;
+    if (chartPlaylists.length > 0) {
+      const topChartDetails = await getPlaylistById(chartPlaylists[0].id);
+      if (topChartDetails?.songs?.length > 0) {
+        songsList = topChartDetails.songs;
+      }
+    }
+
+    // 2. Direct official chart ID fallback if needed
+    if (songsList.length < 10) {
+      const fallbackChart = await getPlaylistById("1134543272");
+      if (fallbackChart?.songs?.length > 0) {
+        songsList = [...songsList, ...fallbackChart.songs];
+      }
+    }
+
+    // 3. Fallback: pull from Punjabi / English top charts
+    if (songsList.length < 10) {
+      const extraCharts = await Promise.all([
+        searchPlaylists("Top 50 Punjabi", 1),
+        searchPlaylists("Top 50 English", 1),
+      ]);
+      const extraPlaylists = extraCharts.flat();
+      for (const pl of extraPlaylists) {
+        if (pl?.id) {
+          const detail = await getPlaylistById(pl.id);
+          if (detail?.songs) songsList.push(...detail.songs);
+        }
+      }
+    }
+
+    // 4. Deduplicate and clean titles
+    const seen = new Set<string>();
+    const unique: Song[] = [];
+
+    for (const song of songsList) {
+      if (!song.videoId || seen.has(song.videoId)) continue;
+      seen.add(song.videoId);
+
+      const cleanedTitle = song.title
+        .replace(/\s*\(official.*?\)\s*/gi, "")
+        .replace(/\s*\[official.*?\]\s*/gi, "")
+        .replace(/^trending\s*[:-]?\s*/gi, "")
+        .trim();
+
+      unique.push({ ...song, title: cleanedTitle || song.title });
+      if (unique.length >= 20) break;
+    }
+
+    return unique;
+  } catch (err) {
+    console.error("Failed to fetch popular chart songs:", err);
+    return [];
   }
-
-  return unique;
 }
 
 export async function getRecommendations(params: {

@@ -127,7 +127,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return { repeatMode: modes[nextIndex] };
     }),
 
-  playNext: () => {
+  playNext: async () => {
     const { queue, currentSong, history, isShuffle, repeatMode } = get();
 
     if (repeatMode === "one" && currentSong) {
@@ -152,7 +152,28 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           isPlaying: true,
         });
       } else {
-        // No songs to play
+        // Queue is empty: automatically generate smart recommendations!
+        try {
+          const { getSmartRecommendations } = await import("../utils/smartRecommendations");
+          const smartSongs = await getSmartRecommendations(currentSong, history);
+          if (smartSongs.length > 0) {
+            const nextSong = smartSongs[0];
+            const newQueue = smartSongs.slice(1);
+            const updatedHistory = currentSong ? [...history, currentSong] : history;
+
+            set({
+              currentSong: nextSong,
+              queue: newQueue,
+              history: updatedHistory,
+              currentTime: 0,
+              duration: parseDurationToSeconds(nextSong.duration),
+              isPlaying: true,
+            });
+            return;
+          }
+        } catch (err) {
+          console.error("Smart queue generation failed:", err);
+        }
         set({ isPlaying: false });
       }
       return;

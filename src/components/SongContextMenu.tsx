@@ -62,7 +62,7 @@ export const SongContextMenu: React.FC<SongContextMenuProps> = ({ song, classNam
             }}
             className="w-full text-left px-4 py-3 flex items-center gap-3 text-sm font-medium text-white hover:bg-white/10 transition-colors"
           >
-            <Heart className={cn("w-4 h-4", isLiked(song.videoId) && "fill-primary text-primary")} />
+            <Heart className={cn("w-4 h-4", isLiked(song.videoId) && "fill-[var(--accent)] text-[var(--accent)]")} />
             {isLiked(song.videoId) ? 'Remove from Liked' : 'Save to Liked Songs'}
           </button>
           

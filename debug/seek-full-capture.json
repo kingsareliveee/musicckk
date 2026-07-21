@@ -1,0 +1,5 @@
+{
+	"note": "Full capture saved. Use a JSON viewer to inspect.",
+	"warning": "This file contains console logs and network events captured from a browser session. Do not commit.",
+	"capture": REPLACEME
+}

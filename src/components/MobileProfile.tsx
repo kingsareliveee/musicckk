@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useTheme, THEMES, type ThemeKey } from "../contexts/ThemeContext";
+import { InstallAppButton } from "./InstallAppButton";
 
 export const MobileProfile: React.FC = () => {
   const { user, logout } = useAuth();
@@ -120,6 +121,11 @@ export const MobileProfile: React.FC = () => {
                   </motion.button>
                 ))}
               </div>
+            </div>
+
+            {/* Install PWA App */}
+            <div className="px-4 py-2 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+              <InstallAppButton />
             </div>
 
             {/* Logout */}

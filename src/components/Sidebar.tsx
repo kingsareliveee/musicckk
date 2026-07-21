@@ -7,6 +7,7 @@ import { useAuth } from "../hooks/useAuth";
 import { usePlaylists } from "../hooks/usePlaylists";
 import { CreatePlaylistModal } from "./CreatePlaylistModal";
 import { useTheme, THEMES, type ThemeKey } from "../contexts/ThemeContext";
+import { InstallAppButton } from "./InstallAppButton";
 
 export const Sidebar: React.FC = () => {
   const navigate = useNavigate();
@@ -152,6 +153,11 @@ export const Sidebar: React.FC = () => {
               </motion.button>
             ))}
           </div>
+        </div>
+
+        {/* Install PWA App */}
+        <div className="px-3">
+          <InstallAppButton />
         </div>
 
         {/* Divider */}

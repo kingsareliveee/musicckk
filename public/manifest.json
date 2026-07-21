@@ -1,0 +1,19 @@
+{
+  "name": "MUSICK — Flow with the Sound",
+  "short_name": "Musick",
+  "description": "Stream music, discover artists, and build your library.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { Loader2 } from 'lucide-react';
 import { usePlayerStore, type Song } from '../store/usePlayerStore';
 import { cn } from '../utils/cn';
 

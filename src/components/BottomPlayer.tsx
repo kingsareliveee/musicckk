@@ -216,13 +216,14 @@ export const BottomPlayer: React.FC = () => {
                   )}
                 </motion.button>
 
-                {/* Next (desktop only) */}
+                {/* Next (mobile & desktop) */}
                 <motion.button
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.9 }}
                   onClick={playNext}
-                  className="hidden md:flex p-1.5"
-                  style={{ color: "rgba(255,255,255,0.60)" }}
+                  className="flex p-1.5"
+                  style={{ color: "rgba(255,255,255,0.70)" }}
+                  title="Next song"
                 >
                   <SkipForward className="w-5 h-5 fill-current" />
                 </motion.button>

@@ -18,6 +18,7 @@ import { SplashScreen } from "./components/SplashScreen";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { OnboardingTastePicker } from "./pages/OnboardingTastePicker";
 import { supabase } from "./lib/supabase";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const SPLASH_KEY = "musick-splash-shown";
 
@@ -48,7 +49,11 @@ function AppInner() {
     }
   });
   const [isGuest, setIsGuest] = useState<boolean>(() => {
-    try { return !!sessionStorage.getItem(GUEST_MODE_KEY); } catch { return false; }
+    try {
+      return !!sessionStorage.getItem(GUEST_MODE_KEY) || !!localStorage.getItem(GUEST_MODE_KEY);
+    } catch {
+      return false;
+    }
   });
 
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
@@ -59,19 +64,30 @@ function AppInner() {
     setShowSplash(false);
   };
 
-  // Sync guest state whenever sessionStorage changes (e.g. after navigating back)
+  // Sync guest state whenever sessionStorage/localStorage or custom event changes
   useEffect(() => {
     const syncGuest = () => {
-      setIsGuest(!!sessionStorage.getItem(GUEST_MODE_KEY));
+      try {
+        setIsGuest(!!sessionStorage.getItem(GUEST_MODE_KEY) || !!localStorage.getItem(GUEST_MODE_KEY));
+      } catch {
+        setIsGuest(false);
+      }
     };
     window.addEventListener('storage', syncGuest);
-    return () => window.removeEventListener('storage', syncGuest);
+    window.addEventListener('guest-mode-changed', syncGuest);
+    return () => {
+      window.removeEventListener('storage', syncGuest);
+      window.removeEventListener('guest-mode-changed', syncGuest);
+    };
   }, []);
 
   // When user logs in, clear guest mode
   useEffect(() => {
     if (user) {
-      sessionStorage.removeItem(GUEST_MODE_KEY);
+      try {
+        sessionStorage.removeItem(GUEST_MODE_KEY);
+        localStorage.removeItem(GUEST_MODE_KEY);
+      } catch {}
       setIsGuest(false);
     }
   }, [user]);
@@ -190,11 +206,13 @@ function AppInner() {
 
 function App() {
   return (
-    <ThemeProvider>
-      <BrowserRouter>
-        <AppInner />
-      </BrowserRouter>
-    </ThemeProvider>
+    <ErrorBoundary>
+      <ThemeProvider>
+        <BrowserRouter>
+          <AppInner />
+        </BrowserRouter>
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 }
 

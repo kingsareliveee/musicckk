@@ -29,6 +29,8 @@ export const Login = () => {
     setGuestLoading(true);
     try {
       sessionStorage.setItem(GUEST_MODE_KEY, '1');
+      localStorage.setItem(GUEST_MODE_KEY, '1');
+      window.dispatchEvent(new Event('guest-mode-changed'));
       toast.success('Browsing as guest');
       navigate('/');
     } finally {

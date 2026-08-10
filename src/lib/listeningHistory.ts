@@ -112,7 +112,7 @@ export async function upsertListeningHistory(
   listenedSeconds: number,
   totalDurationSeconds: number,
 ): Promise<{ error: string | null }> {
-  if (!userId || !song.videoId) return { error: 'Missing userId or songId' };
+  if (!userId || !song?.videoId) return { error: "Missing userId or songId" };
 
   const now = new Date().toISOString();
   const completed = totalDurationSeconds > 0 && listenedSeconds >= totalDurationSeconds * 0.8;
@@ -120,40 +120,41 @@ export async function upsertListeningHistory(
   try {
     // Check for existing row
     const { data: existing, error: fetchErr } = await supabase
-      .from('listening_history')
-      .select('id, play_count, listened_seconds')
-      .eq('user_id', userId)
-      .eq('song_id', song.videoId)
+      .from("listening_history")
+      .select("id, play_count, listened_seconds")
+      .eq("user_id", userId)
+      .eq("song_id", song.videoId)
       .maybeSingle();
 
-    if (fetchErr) throw fetchErr;
+    if (fetchErr) {
+      console.warn("[listeningHistory] fetch check warning:", fetchErr.message);
+    }
 
     if (existing) {
       const { error: updateErr } = await supabase
-        .from('listening_history')
+        .from("listening_history")
         .update({
           play_count: (existing.play_count || 1) + 1,
-          listened_seconds: Math.max((existing.listened_seconds || 0), listenedSeconds),
+          listened_seconds: Math.max(existing.listened_seconds || 0, listenedSeconds),
           listened_at: now,
           completed: completed || false,
           thumbnail: song.thumbnail || null,
         })
-        .eq('id', existing.id);
+        .eq("id", existing.id);
 
       if (updateErr) throw updateErr;
     } else {
       const { error: insertErr } = await supabase
-        .from('listening_history')
+        .from("listening_history")
         .insert({
           user_id: userId,
           song_id: song.videoId,
-          provider: 'jiosaavn',
-          title: song.title,
-          artist: song.artist,
-          image_url: song.thumbnail || null,
+          provider: "jiosaavn",
+          title: song.title || "Unknown",
+          artist: song.artist || "Unknown",
           thumbnail: song.thumbnail || null,
-          duration: totalDurationSeconds,
-          listened_seconds: listenedSeconds,
+          duration: totalDurationSeconds || 0,
+          listened_seconds: listenedSeconds || 0,
           play_count: 1,
           completed,
           listened_at: now,
@@ -165,7 +166,9 @@ export async function upsertListeningHistory(
     return { error: null };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[listeningHistory] upsert failed:', msg);
+    console.warn("[listeningHistory] upsert fallback:", msg);
+    // Fallback to local guest history so play is never lost
+    guestUpsert(song, listenedSeconds);
     return { error: msg };
   }
 }
@@ -175,35 +178,35 @@ export async function upsertListeningHistory(
  */
 export async function fetchRecentHistory(
   userId: string,
-  limit = 50,
+  limit = 50
 ): Promise<{ data: HistoryEntry[]; error: string | null }> {
   try {
     const { data, error } = await supabase
-      .from('listening_history')
-      .select('id, song_id, title, artist, thumbnail, image_url, duration, play_count, listened_at')
-      .eq('user_id', userId)
-      .order('listened_at', { ascending: false })
+      .from("listening_history")
+      .select("*")
+      .eq("user_id", userId)
+      .order("listened_at", { ascending: false })
       .limit(limit);
 
     if (error) throw error;
 
     const entries: HistoryEntry[] = (data || [])
-      .filter(r => r.song_id)
-      .map(r => ({
-        id: r.id,
-        song_id: r.song_id as string,
-        title: r.title,
-        artist: r.artist,
-        thumbnail: (r.thumbnail as string | null) || (r.image_url as string | null) || '',
-        duration: (r.duration as number) || 0,
-        play_count: (r.play_count as number) || 1,
-        listened_at: r.listened_at,
+      .filter((r: any) => r && (r.song_id || r.id))
+      .map((r: any) => ({
+        id: r.id || `hist-${r.song_id}`,
+        song_id: r.song_id || r.video_id || "",
+        title: r.title || "Unknown",
+        artist: r.artist || "Unknown",
+        thumbnail: r.thumbnail || r.image_url || "",
+        duration: r.duration || 0,
+        play_count: r.play_count || 1,
+        listened_at: r.listened_at || r.played_at || new Date().toISOString(),
       }));
 
     return { data: entries, error: null };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { data: [], error: msg };
+    return { data: guestFetchAll(), error: msg };
   }
 }
 
@@ -212,35 +215,36 @@ export async function fetchRecentHistory(
  */
 export async function fetchMostPlayed(
   userId: string,
-  limit = 20,
+  limit = 20
 ): Promise<{ data: HistoryEntry[]; error: string | null }> {
   try {
     const { data, error } = await supabase
-      .from('listening_history')
-      .select('id, song_id, title, artist, thumbnail, image_url, duration, play_count, listened_at')
-      .eq('user_id', userId)
-      .order('play_count', { ascending: false })
+      .from("listening_history")
+      .select("*")
+      .eq("user_id", userId)
+      .order("play_count", { ascending: false })
       .limit(limit);
 
     if (error) throw error;
 
     const entries: HistoryEntry[] = (data || [])
-      .filter(r => r.song_id)
-      .map(r => ({
-        id: r.id,
-        song_id: r.song_id as string,
-        title: r.title,
-        artist: r.artist,
-        thumbnail: (r.thumbnail as string | null) || (r.image_url as string | null) || '',
-        duration: (r.duration as number) || 0,
-        play_count: (r.play_count as number) || 1,
-        listened_at: r.listened_at,
+      .filter((r: any) => r && (r.song_id || r.id))
+      .map((r: any) => ({
+        id: r.id || `hist-${r.song_id}`,
+        song_id: r.song_id || r.video_id || "",
+        title: r.title || "Unknown",
+        artist: r.artist || "Unknown",
+        thumbnail: r.thumbnail || r.image_url || "",
+        duration: r.duration || 0,
+        play_count: r.play_count || 1,
+        listened_at: r.listened_at || r.played_at || new Date().toISOString(),
       }));
 
     return { data: entries, error: null };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { data: [], error: msg };
+    const guestData = guestFetchAll().sort((a, b) => b.play_count - a.play_count).slice(0, limit);
+    return { data: guestData, error: msg };
   }
 }
 

@@ -82,15 +82,17 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   }),
   
   addRecentlyPlayed: (song) => set((state) => {
-    // Use videoId or fallback to id as unique key
-    const key = (s: any) => s.videoId || (s as any).id;
+    if (!song) return state;
+    const key = (s: any) => (s && typeof s === "object" ? s.videoId || s.id : null);
     const songKey = key(song);
-    // Avoid immediate duplicates
-    if (key(state.recentlyPlayed[0]) === songKey) {
+    if (!songKey) return state;
+
+    const first = state.recentlyPlayed[0];
+    if (first && key(first) === songKey) {
       return state;
     }
-    const filtered = state.recentlyPlayed.filter(s => key(s) !== songKey);
-    const newList = [song, ...filtered].slice(0, 50); // keep max 50
+    const filtered = state.recentlyPlayed.filter((s) => key(s) !== songKey);
+    const newList = [song, ...filtered].slice(0, 50);
     return { recentlyPlayed: newList };
   }),
   

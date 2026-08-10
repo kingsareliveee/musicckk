@@ -204,26 +204,16 @@ function AppInner() {
 
           {/* Main app — accessible by authed users OR guests */}
           {canAccess ? (
-            <>
-              {/* Logged-in user who needs onboarding */}
-              {user && needsOnboarding && !checkingOnboarding && (
-                <Route path="*" element={<Navigate to="/" replace />} />
-              )}
-
-              {/* Main app routes */}
-              {(!user || (!checkingOnboarding && !needsOnboarding)) && (
-                <Route path="/" element={<AudioProvider><MainLayout /></AudioProvider>}>
-                  <Route index element={<Home />} />
-                  <Route path="search" element={<Search />} />
-                  <Route path="library" element={<Library />} />
-                  <Route path="library/liked" element={<LikedSongs />} />
-                  <Route path="playlist/:id" element={<PlaylistDetail />} />
-                  <Route path="song/:videoId" element={<SongDetail />} />
-                  <Route path="home" element={<Navigate to="/" replace />} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Route>
-              )}
-            </>
+            <Route path="/" element={<AudioProvider><MainLayout /></AudioProvider>}>
+              <Route index element={<Home />} />
+              <Route path="search" element={<Search />} />
+              <Route path="library" element={<Library />} />
+              <Route path="library/liked" element={<LikedSongs />} />
+              <Route path="playlist/:id" element={<PlaylistDetail />} />
+              <Route path="song/:videoId" element={<SongDetail />} />
+              <Route path="home" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
           ) : (
             <Route path="*" element={<Navigate to="/login" replace />} />
           )}

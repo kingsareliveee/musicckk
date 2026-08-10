@@ -74,7 +74,7 @@ export const useRecentlyPlayed = () => {
   }, [user, setRecentlyPlayed]);
 
   const logPlay = async (song: Song) => {
-    if (!user) return;
+    if (!user || !song) return;
     const vid = (song as any).videoId || (song as any).id;
     if (!vid) return;
 

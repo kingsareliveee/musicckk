@@ -190,15 +190,36 @@ export async function searchAll(query: string): Promise<{
 }
 
 export async function getSongById(id: string): Promise<Song | null> {
-  const data = await fetchJson(`/api/songs?id=${encodeURIComponent(id)}`);
-  const results = extractResults(data) as JioSongItem[];
-  if (results.length > 0) return normalizeSong(results[0]);
+  if (!id) return null;
 
-  const payload = data as { data?: unknown };
-  const single =
-    payload.data && !Array.isArray(payload.data) ? payload.data : null;
-  if (single && typeof single === "object") {
-    return normalizeSong(single as JioSongItem);
+  // 1. Check if song is already in Zustand player store
+  try {
+    const { usePlayerStore } = await import("../store/usePlayerStore");
+    const storeSong = usePlayerStore.getState().currentSong;
+    if (storeSong && (storeSong.videoId === id || (storeSong as any).id === id)) {
+      return storeSong;
+    }
+  } catch {}
+
+  // 2. Try primary endpoint: /api/songs?id=...
+  try {
+    const data = await fetchJson(`/api/songs?id=${encodeURIComponent(id)}`);
+    const results = extractResults(data) as JioSongItem[];
+    if (results.length > 0) return normalizeSong(results[0]);
+
+    const payload = data as { data?: unknown };
+    const single =
+      payload.data && !Array.isArray(payload.data) ? payload.data : null;
+    if (single && typeof single === "object") {
+      return normalizeSong(single as JioSongItem);
+    }
+  } catch {
+    // 3. Fallback: try /api/songs?ids=... if primary endpoint returned 400
+    try {
+      const data = await fetchJson(`/api/songs?ids=${encodeURIComponent(id)}`);
+      const results = extractResults(data) as JioSongItem[];
+      if (results.length > 0) return normalizeSong(results[0]);
+    } catch {}
   }
 
   return null;

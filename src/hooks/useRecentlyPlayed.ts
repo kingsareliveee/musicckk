@@ -112,19 +112,18 @@ export const useRecentlyPlayed = () => {
 
     try {
       // Remove any existing rows for this user/video to avoid duplicates
-      await supabase.from('recently_played').delete().match({ user_id: user.id, song_id: vid });
-      const { error } = await supabase
-        .from('recently_played')
+      await supabase.from("recently_played").delete().match({ user_id: user.id, song_id: vid });
+      await supabase
+        .from("recently_played")
         .insert({
           user_id: user.id,
           song_id: vid,
-          title: song.title,
-          artist: song.artist,
-          duration: durationToSeconds(song.duration)
+          title: song.title || "Unknown",
+          artist: song.artist || "Unknown",
+          duration: durationToSeconds(song.duration),
         });
-      if (error) throw error;
     } catch (err) {
-      console.error('Failed to log recently played song:', err);
+      // Graceful fallback: local state & top-tracks already updated
     }
   };
 

@@ -73,10 +73,17 @@ export const SongDetail: React.FC = () => {
       setError("");
       try {
         const data = await getSongById(videoId);
-        if (!data) throw new Error("Failed to fetch song details");
-        setSong(data);
+        if (data) {
+          setSong(data);
+        } else if (fallbackSong) {
+          setSong(fallbackSong);
+        } else {
+          setError("Failed to load song details.");
+        }
       } catch {
-        if (!fallbackSong) {
+        if (fallbackSong) {
+          setSong(fallbackSong);
+        } else {
           setError("Failed to load song details.");
         }
       } finally {

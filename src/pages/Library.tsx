@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { usePlaylists } from "../hooks/usePlaylists";
@@ -6,9 +6,19 @@ import { useLikedSongs } from "../hooks/useLikedSongs";
 import { useAuth } from "../hooks/useAuth";
 import { GlassCard } from "../components/GlassCard";
 import { usePlayerStore, type Song } from "../store/usePlayerStore";
-import { Heart, Play, Music, Disc, Mic2, TrendingUp, ListMusic, LogIn, ArrowLeft } from "lucide-react";
+import { Heart, Play, Music, Disc, Mic2, TrendingUp, ListMusic, LogIn, ArrowLeft, Clock, Trash2, RotateCcw } from "lucide-react";
 import { CompactTrackRow } from "../components/CompactTrackRow";
 import toast from "react-hot-toast";
+import {
+  fetchRecentHistory,
+  fetchMostPlayed,
+  deleteHistoryEntry,
+  clearAllHistory,
+  guestFetchAll,
+  guestDelete,
+  guestClear,
+  type HistoryEntry,
+} from "../lib/listeningHistory";
 
 const cardVariants = {
   hidden: { opacity: 0, y: 20 },
@@ -30,7 +40,13 @@ export const Library: React.FC = () => {
   const [artistsList, setArtistsList] = useState<any[]>([]);
   const [albumsList, setAlbumsList] = useState<any[]>([]);
   const [topTracksList, setTopTracksList] = useState<any[]>([]);
-  const [activeView, setActiveView] = useState<"collection" | "artists" | "albums" | "top_tracks">("collection");
+  const [activeView, setActiveView] = useState<"collection" | "artists" | "albums" | "top_tracks" | "history">("collection");
+
+  // Listening history state
+  const [recentHistory, setRecentHistory] = useState<HistoryEntry[]>([]);
+  const [mostPlayed, setMostPlayed] = useState<HistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
 
   // Fetch local storage liked playlists
   useEffect(() => {
@@ -127,6 +143,7 @@ export const Library: React.FC = () => {
     { key: "playlists", icon: ListMusic, label: "Playlists", count: `${playlistCount} playlists`, color: "#8BCFC6" },
     { key: "albums", icon: Disc, label: "Albums", count: `${albumsList.length} albums`, color: "#E4C16F" },
     { key: "artists", icon: Mic2, label: "Artists", count: `${artistsList.length} artists`, color: "#E89CB0" },
+    { key: "history", icon: Clock, label: "History", count: `${recentHistory.length} plays`, color: "#a78bfa" },
   ];
 
   if (!user) {
@@ -181,8 +198,87 @@ export const Library: React.FC = () => {
       setActiveView("albums");
     } else if (key === "top_tracks") {
       setActiveView("top_tracks");
+    } else if (key === "history") {
+      setActiveView("history");
+      loadHistory();
     }
   };
+
+  // Load listening history (Supabase or guest localStorage)
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      if (user) {
+        const [recentRes, mostRes] = await Promise.all([
+          fetchRecentHistory(user.id, 50),
+          fetchMostPlayed(user.id, 20),
+        ]);
+        if (recentRes.error) throw new Error(recentRes.error);
+        if (mostRes.error) throw new Error(mostRes.error);
+        setRecentHistory(recentRes.data);
+        setMostPlayed(mostRes.data);
+      } else {
+        const all = guestFetchAll();
+        setRecentHistory([...all].sort((a, b) => new Date(b.listened_at).getTime() - new Date(a.listened_at).getTime()));
+        setMostPlayed([...all].sort((a, b) => b.play_count - a.play_count).slice(0, 20));
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setHistoryError(msg);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [user]);
+
+  const handleDeleteHistoryEntry = async (entry: HistoryEntry) => {
+    if (user) {
+      const { error } = await deleteHistoryEntry(user.id, entry.song_id);
+      if (error) { toast.error("Failed to delete entry"); return; }
+    } else {
+      guestDelete(entry.song_id);
+    }
+    setRecentHistory(prev => prev.filter(e => e.song_id !== entry.song_id));
+    setMostPlayed(prev => prev.filter(e => e.song_id !== entry.song_id));
+    toast.success("Removed from history");
+  };
+
+  const handleClearHistory = async () => {
+    if (!confirm("Clear your entire listening history?")) return;
+    if (user) {
+      const { error } = await clearAllHistory(user.id);
+      if (error) { toast.error("Failed to clear history"); return; }
+    } else {
+      guestClear();
+    }
+    setRecentHistory([]);
+    setMostPlayed([]);
+    toast.success("Listening history cleared");
+  };
+
+  const handlePlayHistorySong = (entry: HistoryEntry) => {
+    const song: Song = {
+      videoId: entry.song_id,
+      title: entry.title,
+      artist: entry.artist,
+      thumbnail: entry.thumbnail,
+      duration: entry.duration ? `${Math.floor(entry.duration / 60)}:${String(entry.duration % 60).padStart(2, "0")}` : "0:00",
+    };
+    setCurrentSong(song);
+  };
+
+  function formatRelativeDate(iso: string): string {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "Just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(iso).toLocaleDateString();
+  }
+
 
   const handlePlaySong = (song: Song, idx: number, list: Song[]) => {
     setCurrentSong(song);
@@ -588,6 +684,176 @@ export const Library: React.FC = () => {
                   );
                 })}
               </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* ── HISTORY VIEW ───────────────────────────────── */}
+        {activeView === "history" && (
+          <motion.div
+            key="history"
+            initial={{ opacity: 0, x: 30 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -30 }}
+            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            className="flex flex-col gap-8"
+          >
+            {/* Back + header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setActiveView("collection")}
+                  className="w-9 h-9 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors"
+                >
+                  <ArrowLeft className="w-5 h-5 text-white/60" />
+                </button>
+                <div>
+                  <h1 className="text-2xl font-bold text-white font-outfit">Listening History</h1>
+                  <p className="text-xs text-white/30 mt-0.5">
+                    {user ? "Synced to your account" : "Saved locally (sign in to sync)"}
+                  </p>
+                </div>
+              </div>
+              {(recentHistory.length > 0 || mostPlayed.length > 0) && (
+                <button
+                  onClick={handleClearHistory}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold text-red-400 hover:bg-red-400/10 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Clear All
+                </button>
+              )}
+            </div>
+
+            {/* Reload button */}
+            <button
+              onClick={loadHistory}
+              disabled={historyLoading}
+              className="self-start flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${historyLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+
+            {historyError && (
+              <div className="rounded-2xl p-4 text-sm text-red-400" style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.15)" }}>
+                {historyError}
+              </div>
+            )}
+
+            {historyLoading ? (
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)" }}>
+                    <div className="skeleton w-10 h-10 rounded-lg flex-shrink-0" />
+                    <div className="flex-1 flex flex-col gap-2">
+                      <div className="skeleton h-3 rounded-full w-1/2" />
+                      <div className="skeleton h-2.5 rounded-full w-1/3" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : recentHistory.length === 0 && mostPlayed.length === 0 ? (
+              <div className="flex flex-col items-center gap-4 py-16 text-center">
+                <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.15)" }}>
+                  <Clock className="w-8 h-8" style={{ color: "#a78bfa" }} />
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-white/60">No listening history yet</p>
+                  <p className="text-sm text-white/30 mt-1">Songs you listen to for 30+ seconds will appear here.</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Recently Played */}
+                {recentHistory.length > 0 && (
+                  <section>
+                    <h2 className="text-sm font-semibold text-white/40 uppercase tracking-widest mb-3">Recently Played</h2>
+                    <div className="flex flex-col gap-1">
+                      {recentHistory.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className="group flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors"
+                        >
+                          <img
+                            src={entry.thumbnail}
+                            alt={entry.title}
+                            className="w-10 h-10 object-cover rounded-lg flex-shrink-0"
+                            onError={(e) => { e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(entry.title)}`; }}
+                          />
+                          <div
+                            className="flex-1 min-w-0 cursor-pointer"
+                            onClick={() => handlePlayHistorySong(entry)}
+                          >
+                            <p className="text-sm font-semibold text-white truncate">{entry.title}</p>
+                            <p className="text-xs text-white/40 truncate">{entry.artist}</p>
+                          </div>
+                          <div className="flex items-center gap-3 flex-shrink-0">
+                            <span className="text-xs text-white/20 tabular-nums hidden sm:block">
+                              {formatRelativeDate(entry.listened_at)}
+                            </span>
+                            {entry.play_count > 1 && (
+                              <span className="text-xs text-purple-400/70 font-medium">
+                                ×{entry.play_count}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => handleDeleteHistoryEntry(entry)}
+                              className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-full flex items-center justify-center hover:bg-red-400/15 text-red-400/60 hover:text-red-400 transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {/* Most Played */}
+                {mostPlayed.length > 0 && (
+                  <section>
+                    <h2 className="text-sm font-semibold text-white/40 uppercase tracking-widest mb-3">Most Played</h2>
+                    <div className="flex flex-col gap-1">
+                      {mostPlayed.slice(0, 20).map((entry, idx) => (
+                        <div
+                          key={`mp-${entry.id}`}
+                          className="group flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors"
+                        >
+                          <span className="w-5 text-right text-xs text-white/20 tabular-nums flex-shrink-0">{idx + 1}</span>
+                          <img
+                            src={entry.thumbnail}
+                            alt={entry.title}
+                            className="w-10 h-10 object-cover rounded-lg flex-shrink-0"
+                            onError={(e) => { e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(entry.title)}`; }}
+                          />
+                          <div
+                            className="flex-1 min-w-0 cursor-pointer"
+                            onClick={() => handlePlayHistorySong(entry)}
+                          >
+                            <p className="text-sm font-semibold text-white truncate">{entry.title}</p>
+                            <p className="text-xs text-white/40 truncate">{entry.artist}</p>
+                          </div>
+                          <div className="flex items-center gap-3 flex-shrink-0">
+                            <span
+                              className="text-xs font-bold px-2.5 py-0.5 rounded-full"
+                              style={{ background: "rgba(167,139,250,0.12)", color: "#a78bfa" }}
+                            >
+                              {entry.play_count} {entry.play_count === 1 ? "play" : "plays"}
+                            </span>
+                            <button
+                              onClick={() => handleDeleteHistoryEntry(entry)}
+                              className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-full flex items-center justify-center hover:bg-red-400/15 text-red-400/60 hover:text-red-400 transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </>
             )}
           </motion.div>
         )}

@@ -174,8 +174,10 @@ create table if not exists public.listening_history (
   artist text not null,
   album text,
   image_url text,
+  thumbnail text,
   duration integer not null default 0,
   listened_seconds integer not null default 0,
+  play_count integer not null default 1,
   completed boolean not null default false,
   listened_at timestamptz not null default now()
 );
@@ -184,13 +186,25 @@ alter table public.listening_history add column if not exists song_id text;
 alter table public.listening_history add column if not exists provider text not null default 'jiosaavn';
 alter table public.listening_history add column if not exists album text;
 alter table public.listening_history add column if not exists image_url text;
+alter table public.listening_history add column if not exists thumbnail text;
 alter table public.listening_history add column if not exists duration integer not null default 0;
 alter table public.listening_history add column if not exists listened_seconds integer not null default 0;
+alter table public.listening_history add column if not exists play_count integer not null default 1;
 alter table public.listening_history add column if not exists completed boolean not null default false;
 alter table public.listening_history add column if not exists listened_at timestamptz not null default now();
 
 create index if not exists listening_history_user_listened_idx
   on public.listening_history (user_id, listened_at desc);
+
+create unique index if not exists listening_history_user_song_unique
+  on public.listening_history (user_id, song_id)
+  where song_id is not null;
+
+create index if not exists listening_history_user_playcount_idx
+  on public.listening_history (user_id, play_count desc);
+
+create index if not exists listening_history_user_songid_idx
+  on public.listening_history (user_id, song_id);
 
 -- 9. ARTIST PREFERENCES TABLE
 create table if not exists public.artist_preferences (

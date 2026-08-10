@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Search as SearchIcon,
   X,
@@ -9,6 +9,7 @@ import {
   Music,
   Mic2,
   ListMusic,
+  Sparkles,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
@@ -16,6 +17,7 @@ import Fuse from "fuse.js";
 import { GlassCard } from "../components/GlassCard";
 import { usePlayerStore, type Song } from "../store/usePlayerStore";
 import { searchAll } from "../lib/jiosaavn";
+import { getRelatedSongs } from "../utils/smartRecommendations";
 
 interface RecentSearchItem {
   id: string;
@@ -218,6 +220,11 @@ export const Search: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Related songs state — populated after search resolves, based on top song artist
+  const [relatedSongs, setRelatedSongs] = useState<Song[]>([]);
+  const [relatedLoading, setRelatedLoading] = useState(false);
+  const lastRelatedArtistRef = useRef<string | null>(null);
+
   // Ctrl+K shortcut
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -235,16 +242,52 @@ export const Search: React.FC = () => {
     if (!searchTerm.trim()) return;
     setLoading(true);
     setError("");
+    setRelatedSongs([]);
+    lastRelatedArtistRef.current = null;
     try {
       const data = await searchAll(searchTerm);
       const songs: Song[] = data.songs || [];
       const playlists = data.playlists || [];
       const artists = data.artists || [];
 
-      // Apply Fuse.js fuzzy re-ranking on songs for better typo tolerance
-      let rankedSongs = songs;
-      if (songs.length > 0 && searchTerm.trim().length > 1) {
-        const fuse = new Fuse(songs, {
+      // ── Smart ranking: score-based exact/artist matching ─────────────
+      // Priority: exact title match > title starts with > artist exact > fuzzy
+      const termLower = searchTerm.trim().toLowerCase();
+      const termWords = termLower.split(/\s+/).filter(Boolean);
+
+      function scoreResult(s: Song): number {
+        const titleL = s.title.toLowerCase();
+        const artistL = s.artist.toLowerCase();
+        let score = 0;
+        // Exact full title match
+        if (titleL === termLower) score += 100;
+        // Title starts with query
+        else if (titleL.startsWith(termLower)) score += 70;
+        // Title contains full query
+        else if (titleL.includes(termLower)) score += 50;
+        // Artist exact match
+        if (artistL === termLower) score += 60;
+        else if (artistL.includes(termLower)) score += 30;
+        // All query words appear in title
+        if (termWords.every((w) => titleL.includes(w))) score += 40;
+        // All query words appear in artist
+        if (termWords.every((w) => artistL.includes(w))) score += 25;
+        // At least one word matches title
+        if (termWords.some((w) => titleL.includes(w))) score += 10;
+        return score;
+      }
+
+      // Score and sort
+      const scored = songs.map((s) => ({ song: s, score: scoreResult(s) }));
+      scored.sort((a, b) => b.score - a.score);
+      let rankedSongs = scored.map((x) => x.song);
+
+      // Apply Fuse.js for fuzzy fallback on songs with score=0
+      const highScored = scored.filter((x) => x.score > 0).map((x) => x.song);
+      const lowScored = scored.filter((x) => x.score === 0).map((x) => x.song);
+
+      if (lowScored.length > 0 && searchTerm.trim().length > 1) {
+        const fuse = new Fuse(lowScored, {
           keys: [
             { name: "title", weight: 0.6 },
             { name: "artist", weight: 0.4 },
@@ -255,15 +298,34 @@ export const Search: React.FC = () => {
           minMatchCharLength: 2,
         });
         const fuseResults = fuse.search(searchTerm);
-        if (fuseResults.length > 0) {
-          // Blend: keep fuse-ranked first, then append remaining results
-          const fuseIds = new Set(fuseResults.map((r) => r.item.videoId));
-          const nonFuse = songs.filter((s) => !fuseIds.has(s.videoId));
-          rankedSongs = [...fuseResults.map((r) => r.item), ...nonFuse];
-        }
+        rankedSongs = [
+          ...highScored,
+          ...fuseResults.map((r) => r.item),
+          ...lowScored.filter((s) => !fuseResults.some((r) => r.item.videoId === s.videoId)),
+        ];
+      } else {
+        rankedSongs = [...highScored, ...lowScored];
       }
 
       setResults({ songs: rankedSongs, playlists, artists });
+
+      // Fetch related songs based on the TOP result's ARTIST (not the search term)
+      if (rankedSongs.length > 0) {
+        const topSong = rankedSongs[0];
+        const artistKey = topSong.artist;
+        if (artistKey !== lastRelatedArtistRef.current) {
+          lastRelatedArtistRef.current = artistKey;
+          setRelatedLoading(true);
+          getRelatedSongs(topSong, 12)
+            .then((related) => {
+              // Exclude songs already in main results
+              const resultIds = new Set(rankedSongs.map((s) => s.videoId));
+              setRelatedSongs(related.filter((s) => !resultIds.has(s.videoId)));
+            })
+            .catch(console.error)
+            .finally(() => setRelatedLoading(false));
+        }
+      }
     } catch {
       setError("Couldn't load results. Try again.");
     } finally {
@@ -271,14 +333,22 @@ export const Search: React.FC = () => {
     }
   };
 
+  // Stable reference for performSearch to avoid unnecessary re-runs
+  const performSearchRef = useRef(performSearch);
+  performSearchRef.current = performSearch;
+
+  const stableSearch = useCallback((term: string) => performSearchRef.current(term), []);
+
   useEffect(() => {
     if (!query.trim()) {
       setResults(null);
+      setRelatedSongs([]);
+      lastRelatedArtistRef.current = null;
       return;
     }
-    const timer = setTimeout(() => performSearch(query), 300);
+    const timer = setTimeout(() => stableSearch(query), 300);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, stableSearch]);
 
   const handlePlaySong = (
     song: Song,
@@ -1190,6 +1260,86 @@ export const Search: React.FC = () => {
                           subtitle={playlist.author}
                           imageUrl={playlist.thumbnail}
                           onClick={() => handlePlaylistClick(playlist)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {/* ── RELATED SONGS (artist/genre-based, NOT title-keyword) ── */}
+            {(relatedLoading || relatedSongs.length > 0) && (
+              <section>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Sparkles className="w-4.5 h-4.5 text-accent" />
+                    Related Songs
+                    {results?.songs?.[0]?.artist && (
+                      <span className="text-xs font-normal text-white/30 ml-1">
+                        based on {results.songs[0].artist.split(",")[0].trim()}
+                      </span>
+                    )}
+                  </h2>
+                </div>
+
+                {relatedLoading ? (
+                  <div className="flex gap-5 overflow-x-auto hide-scrollbar pb-3">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={i} className="w-[180px] flex-shrink-0">
+                        <div
+                          className="rounded-[20px] overflow-hidden"
+                          style={{
+                            background: "rgba(255,255,255,0.02)",
+                            border: "1px solid rgba(255,255,255,0.05)",
+                          }}
+                        >
+                          <div className="aspect-square skeleton" />
+                          <div className="p-4 flex flex-col gap-2">
+                            <div className="skeleton h-3 rounded-full w-3/4" />
+                            <div className="skeleton h-2.5 rounded-full w-1/2" />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : isMobile ? (
+                  <div className="flex flex-col gap-1">
+                    {relatedSongs.map((song, idx) => (
+                      <div
+                        key={song.videoId}
+                        onClick={() => handlePlaySong(song, idx, relatedSongs)}
+                        className="flex items-center gap-3 p-2 rounded-xl bg-white/0 hover:bg-white/5 active:bg-white/5 transition-all cursor-pointer"
+                      >
+                        <img
+                          src={song.thumbnail}
+                          alt={song.title}
+                          className="w-10 h-10 object-cover rounded-md flex-shrink-0"
+                          onError={(e) => {
+                            e.currentTarget.src = "https://ui-avatars.com/api/?name=Song";
+                          }}
+                        />
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-sm font-bold text-white truncate">
+                            {song.title}
+                          </span>
+                          <span className="text-xs text-white/40 truncate">
+                            {song.artist}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex gap-5 overflow-x-auto hide-scrollbar pb-3 scroll-smooth">
+                    {relatedSongs.map((song, idx) => (
+                      <div key={song.videoId} className="w-[180px] flex-shrink-0">
+                        <GlassCard
+                          title={song.title}
+                          subtitle={song.artist}
+                          imageUrl={song.thumbnail}
+                          song={song}
+                          onClick={() => handlePlaySong(song, idx, relatedSongs)}
                         />
                       </div>
                     ))}

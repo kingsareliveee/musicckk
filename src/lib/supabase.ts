@@ -239,8 +239,10 @@ export interface Database {
           artist: string;
           album: string | null;
           image_url: string | null;
+          thumbnail: string | null;
           duration: number;
           listened_seconds: number;
+          play_count: number;
           completed: boolean;
           listened_at: string;
         };
@@ -253,8 +255,10 @@ export interface Database {
           artist: string;
           album?: string | null;
           image_url?: string | null;
+          thumbnail?: string | null;
           duration?: number;
           listened_seconds?: number;
+          play_count?: number;
           completed?: boolean;
           listened_at?: string;
         };
@@ -267,8 +271,10 @@ export interface Database {
           artist?: string;
           album?: string | null;
           image_url?: string | null;
+          thumbnail?: string | null;
           duration?: number;
           listened_seconds?: number;
+          play_count?: number;
           completed?: boolean;
           listened_at?: string;
         };

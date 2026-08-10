@@ -3,6 +3,8 @@ import { audioEngine } from "../lib/audioEngine";
 import { usePlayerStore, type Song } from "../store/usePlayerStore";
 import { useRecentlyPlayed } from "../hooks/useRecentlyPlayed";
 import { getSongById } from "../lib/jiosaavn";
+import { upsertListeningHistory, guestUpsert } from "../lib/listeningHistory";
+import { useLibraryStore } from "../store/useLibraryStore";
 
 /**
  * AudioProvider — bridges the singleton AudioEngine with the Zustand player store.
@@ -16,14 +18,59 @@ import { getSongById } from "../lib/jiosaavn";
  * 3. When `volume` changes → update engine volume
  * 4. Forward engine events → Zustand store (currentTime, duration, etc.)
  */
-// Module-level variable to survive React lifecycle triggers and re-mounts
+// Module-level variables to survive React lifecycle triggers and re-mounts
 let globalLoadedVideoId: string | null = null;
 let globalLoadToken = 0;
+
+// Module-level listen-time session tracking (per song)
+// Prevents duplicate history writes from re-renders
+interface ListenSession {
+  videoId: string;
+  song: Song;
+  startedAt: number;     // Date.now() ms
+  accumulatedSeconds: number;
+  committed: boolean;    // true once we've written to DB for this session
+}
+let currentListenSession: ListenSession | null = null;
+
+/**
+ * Commit listening history for a session if threshold is met.
+ * Threshold: >=30 seconds listened OR >=50% of total duration.
+ * Only commits once per session (committed flag prevents re-entry).
+ */
+async function maybeCommitHistory(
+  session: ListenSession,
+  totalDurationSeconds: number,
+  userId: string | null,
+): Promise<void> {
+  if (session.committed) return;
+  const { accumulatedSeconds } = session;
+  const threshold50pct = totalDurationSeconds > 0 ? totalDurationSeconds * 0.5 : Infinity;
+  const metThreshold = accumulatedSeconds >= 30 || accumulatedSeconds >= threshold50pct;
+  if (!metThreshold) return;
+
+  session.committed = true;
+
+  if (userId) {
+    await upsertListeningHistory(userId, session.song, Math.round(accumulatedSeconds), totalDurationSeconds);
+  } else {
+    guestUpsert(session.song, Math.round(accumulatedSeconds));
+  }
+}
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const { logPlay } = useRecentlyPlayed();
+  const userRef = useRef<string | null>(null);
+
+  // Keep userRef current without subscribing whole component to auth state changes
+  useEffect(() => {
+    userRef.current = useLibraryStore.getState().user?.id ?? null;
+    return useLibraryStore.subscribe((state) => {
+      userRef.current = state.user?.id ?? null;
+    });
+  }, []);
 
   // ── CRITICAL FIX: stabilize logPlay reference ──
   // logPlay is a new function every render (not memoized in useRecentlyPlayed).
@@ -50,6 +97,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({
     audioEngine.setCallbacks({
       onTimeUpdate: (time) => {
         storeRef.current.setCurrentTime(time);
+        // Accumulate listen time for current session
+        if (currentListenSession && !currentListenSession.committed) {
+          currentListenSession.accumulatedSeconds = time;
+        }
       },
       onDurationChange: (dur) => {
         storeRef.current.setDuration(dur);
@@ -61,6 +112,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({
         }
       },
       onEnded: () => {
+        // Song ended naturally — commit full duration as listened
+        if (currentListenSession && !currentListenSession.committed) {
+          const totalDur = storeRef.current.duration || 0;
+          // Mark full session as the total duration for completion
+          currentListenSession.accumulatedSeconds = totalDur;
+          maybeCommitHistory(currentListenSession, totalDur, userRef.current).catch(console.error);
+        }
         storeRef.current.playNext();
       },
       onError: (errorMsg) => {
@@ -105,15 +163,22 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({
 
       // Only process if song actually changed
       if (song?.videoId === prevSong?.videoId) return;
+
+      // Commit history for the previous song session before switching
+      if (prevSong && currentListenSession && currentListenSession.videoId === prevSong.videoId) {
+        const totalDur = storeRef.current.duration || 0;
+        maybeCommitHistory(currentListenSession, totalDur, userRef.current).catch(console.error);
+      }
+
       prevSong = song;
 
       // This listener only runs when `currentSong` changes.
       if (!song) {
         if (globalLoadedVideoId !== null) {
-          // Debug: currentSong cleared -> unloading
           audioEngine.unload();
           globalLoadedVideoId = null;
         }
+        currentListenSession = null;
         return;
       }
 
@@ -140,6 +205,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({
 
             globalLoadedVideoId = song.videoId;
             audioEngine.load(song.videoId, streamUrl);
+
+            // Start a new listen session for this song
+            currentListenSession = {
+              videoId: song.videoId,
+              song: { ...song, streamUrl },
+              startedAt: Date.now(),
+              accumulatedSeconds: 0,
+              committed: false,
+            };
 
             // Log recently played (use ref to avoid stale closure)
             logPlayRef.current({ ...song, streamUrl });

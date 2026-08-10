@@ -945,6 +945,86 @@ export const Search: React.FC = () => {
               </section>
             )}
 
+            {/* ── RELATED SONGS (artist/genre-based, NOT title-keyword) ── */}
+            {(relatedLoading || relatedSongs.length > 0) && (
+              <section className="mt-2">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Sparkles className="w-4.5 h-4.5 text-accent" />
+                    Related Songs
+                    {results?.songs?.[0]?.artist && (
+                      <span className="text-xs font-normal text-white/30 ml-1">
+                        based on {results.songs[0].artist.split(",")[0].trim()}
+                      </span>
+                    )}
+                  </h2>
+                </div>
+
+                {relatedLoading ? (
+                  <div className="flex gap-5 overflow-x-auto hide-scrollbar pb-3">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={i} className="w-[180px] flex-shrink-0">
+                        <div
+                          className="rounded-[20px] overflow-hidden"
+                          style={{
+                            background: "rgba(255,255,255,0.02)",
+                            border: "1px solid rgba(255,255,255,0.05)",
+                          }}
+                        >
+                          <div className="aspect-square skeleton" />
+                          <div className="p-4 flex flex-col gap-2">
+                            <div className="skeleton h-3 rounded-full w-3/4" />
+                            <div className="skeleton h-2.5 rounded-full w-1/2" />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : isMobile ? (
+                  <div className="flex flex-col gap-1">
+                    {relatedSongs.map((song, idx) => (
+                      <div
+                        key={song.videoId}
+                        onClick={() => handlePlaySong(song, idx, relatedSongs)}
+                        className="flex items-center gap-3 p-2 rounded-xl bg-white/0 hover:bg-white/5 active:bg-white/5 transition-all cursor-pointer"
+                      >
+                        <img
+                          src={song.thumbnail}
+                          alt={song.title}
+                          className="w-10 h-10 object-cover rounded-md flex-shrink-0"
+                          onError={(e) => {
+                            e.currentTarget.src = "https://ui-avatars.com/api/?name=Song";
+                          }}
+                        />
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-sm font-bold text-white truncate">
+                            {song.title}
+                          </span>
+                          <span className="text-xs text-white/40 truncate">
+                            {song.artist}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex gap-5 overflow-x-auto hide-scrollbar pb-3 scroll-smooth">
+                    {relatedSongs.map((song, idx) => (
+                      <div key={song.videoId} className="w-[180px] flex-shrink-0">
+                        <GlassCard
+                          title={song.title}
+                          subtitle={song.artist}
+                          imageUrl={song.thumbnail}
+                          song={song}
+                          onClick={() => handlePlaySong(song, idx, relatedSongs)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
             {/* Artists section */}
             {results.artists && results.artists.length > 0 && (
               <section>
@@ -1260,86 +1340,6 @@ export const Search: React.FC = () => {
                           subtitle={playlist.author}
                           imageUrl={playlist.thumbnail}
                           onClick={() => handlePlaylistClick(playlist)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-            )}
-
-            {/* ── RELATED SONGS (artist/genre-based, NOT title-keyword) ── */}
-            {(relatedLoading || relatedSongs.length > 0) && (
-              <section>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Sparkles className="w-4.5 h-4.5 text-accent" />
-                    Related Songs
-                    {results?.songs?.[0]?.artist && (
-                      <span className="text-xs font-normal text-white/30 ml-1">
-                        based on {results.songs[0].artist.split(",")[0].trim()}
-                      </span>
-                    )}
-                  </h2>
-                </div>
-
-                {relatedLoading ? (
-                  <div className="flex gap-5 overflow-x-auto hide-scrollbar pb-3">
-                    {Array.from({ length: 6 }).map((_, i) => (
-                      <div key={i} className="w-[180px] flex-shrink-0">
-                        <div
-                          className="rounded-[20px] overflow-hidden"
-                          style={{
-                            background: "rgba(255,255,255,0.02)",
-                            border: "1px solid rgba(255,255,255,0.05)",
-                          }}
-                        >
-                          <div className="aspect-square skeleton" />
-                          <div className="p-4 flex flex-col gap-2">
-                            <div className="skeleton h-3 rounded-full w-3/4" />
-                            <div className="skeleton h-2.5 rounded-full w-1/2" />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : isMobile ? (
-                  <div className="flex flex-col gap-1">
-                    {relatedSongs.map((song, idx) => (
-                      <div
-                        key={song.videoId}
-                        onClick={() => handlePlaySong(song, idx, relatedSongs)}
-                        className="flex items-center gap-3 p-2 rounded-xl bg-white/0 hover:bg-white/5 active:bg-white/5 transition-all cursor-pointer"
-                      >
-                        <img
-                          src={song.thumbnail}
-                          alt={song.title}
-                          className="w-10 h-10 object-cover rounded-md flex-shrink-0"
-                          onError={(e) => {
-                            e.currentTarget.src = "https://ui-avatars.com/api/?name=Song";
-                          }}
-                        />
-                        <div className="flex flex-col min-w-0">
-                          <span className="text-sm font-bold text-white truncate">
-                            {song.title}
-                          </span>
-                          <span className="text-xs text-white/40 truncate">
-                            {song.artist}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex gap-5 overflow-x-auto hide-scrollbar pb-3 scroll-smooth">
-                    {relatedSongs.map((song, idx) => (
-                      <div key={song.videoId} className="w-[180px] flex-shrink-0">
-                        <GlassCard
-                          title={song.title}
-                          subtitle={song.artist}
-                          imageUrl={song.thumbnail}
-                          song={song}
-                          onClick={() => handlePlaySong(song, idx, relatedSongs)}
                         />
                       </div>
                     ))}

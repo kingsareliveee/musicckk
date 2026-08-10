@@ -3,10 +3,10 @@
  * ================
  * Robust, high-confidence Lyrics & Translation engine for Musick.
  *
- * Core Principles:
- * 1. Never match lyrics by title alone. Match Song ID / Exact Title + Artist + Duration.
- * 2. Reject low-confidence matches. Wrong lyrics are worse than missing lyrics.
- * 3. Contextual English translation for Hindi, Punjabi, Urdu, and foreign lyrics.
+ * Principles:
+ * 1. Never match lyrics by title alone. Match Song ID / Title + Artist + Duration.
+ * 2. Auto-extract parenthesized inline English translations (e.g. "Line (English)")
+ * 3. Contextual English translation for Gurmukhi, Devanagari, Urdu, and foreign lyrics.
  * 4. Align synced LRC timestamps 1:1 between Original & Translated lines.
  * 5. Cache translations safely (song ID + lyrics hash).
  */
@@ -28,7 +28,7 @@ export interface LyricsResult {
 }
 
 /**
- * Clean title for search while preserving essential tags like Remix/Cover.
+ * Clean title for search.
  */
 function normalizeString(str: string): string {
   return str
@@ -83,6 +83,27 @@ export function parseDurationSeconds(dur: string | number | undefined): number |
 }
 
 /**
+ * Extract inline parenthesized translation e.g. "Punjabi Line (English Translation)"
+ */
+function processLineTranslation(rawText: string): { text: string; translation?: string } {
+  if (!rawText) return { text: "" };
+
+  // Match pattern: "Original line (English translation)" or "Original line [English translation]"
+  const match = rawText.match(/^(.*?)\s*[\(\[\{]([^\(\)\[\]\{\}]+)[\)\]\}]\s*$/);
+  if (match && match[1].trim() && match[2].trim()) {
+    const orig = match[1].trim();
+    const trans = match[2].trim();
+
+    // Verify if inner bracket text looks like an English translation (Latin characters)
+    if (/[a-zA-Z]/.test(trans)) {
+      return { text: orig, translation: trans };
+    }
+  }
+
+  return { text: rawText };
+}
+
+/**
  * Parse raw LRC string into structured SyncedLyricLine objects.
  */
 export function parseLrc(lrc: string): SyncedLyricLine[] {
@@ -96,9 +117,11 @@ export function parseLrc(lrc: string): SyncedLyricLine[] {
       const minutes = parseInt(match[1], 10);
       const seconds = parseFloat(match[2]);
       const time = minutes * 60 + seconds;
-      const text = line.replace(timeRegex, "").replace(/\[.*?\]/g, "").trim();
-      if (text) {
-        result.push({ time, text });
+      const rawText = line.replace(timeRegex, "").replace(/\[.*?\]/g, "").trim();
+
+      if (rawText) {
+        const { text, translation } = processLineTranslation(rawText);
+        result.push({ time, text, translation });
       }
     }
   }
@@ -141,20 +164,17 @@ export async function fetchValidatedLyrics(song: {
       if (searchRes.ok) {
         const results = await searchRes.json();
         if (Array.isArray(results) && results.length > 0) {
-          // Score candidates by title, artist, and duration closeness
           const scored = results.map((item: any) => {
             const titleSim = calculateSimilarity(cleanTitle, item.trackName || "");
             const artistSim = calculateSimilarity(cleanArtist, item.artistName || "");
             let score = titleSim * 0.5 + artistSim * 0.5;
 
-            // Duration verification (critical to avoid matching wrong remixes/covers)
             if (expectedDurationSec && item.duration) {
               const diff = Math.abs(expectedDurationSec - item.duration);
               if (diff <= 5) score += 0.3;
               else if (diff > 15) score -= 0.4;
             }
 
-            // Prefer synced lyrics slightly
             if (item.syncedLyrics) score += 0.1;
 
             return { item, score, titleSim, artistSim };
@@ -163,8 +183,7 @@ export async function fetchValidatedLyrics(song: {
           scored.sort((a, b) => b.score - a.score);
           const top = scored[0];
 
-          // Reject low-confidence matches: require at least 0.45 similarity for title & artist
-          if (top && top.score >= 0.5 && top.titleSim >= 0.3 && top.artistSim >= 0.3) {
+          if (top && top.score >= 0.45 && top.titleSim >= 0.25 && top.artistSim >= 0.25) {
             candidate = top.item;
           }
         }
@@ -175,12 +194,10 @@ export async function fetchValidatedLyrics(song: {
       return { status: "unavailable", isSynced: false, syncedLyrics: [], plainLyrics: "", errorMessage: "Lyrics unavailable" };
     }
 
-    // Instrumental check
     if (candidate.instrumental) {
       return { status: "instrumental", isSynced: false, syncedLyrics: [], plainLyrics: "" };
     }
 
-    // Process valid candidate
     if (candidate.syncedLyrics) {
       const parsed = parseLrc(candidate.syncedLyrics);
       if (parsed.length > 0) {
@@ -199,9 +216,6 @@ export async function fetchValidatedLyrics(song: {
   }
 }
 
-/**
- * Generate a hash for cache keys.
- */
 function simpleHash(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -213,29 +227,33 @@ function simpleHash(str: string): string {
 }
 
 /**
- * Detect if text is primarily English (to avoid unnecessary translation).
+ * Detect non-English text (Devanagari, Gurmukhi, Urdu, Arabic, Korean, CJK, etc. or Indic Romanized)
  */
 export function isEnglishText(text: string): boolean {
-  const clean = text.replace(/[^a-zA-Z]/g, "");
-  if (clean.length === 0) return false;
-  // If >85% of characters are standard ASCII Latin characters, check common non-English keywords
-  const nonEnglishIndicators = /\b(aur|hai|hoon|tum|meri|tere|dil|kya|nahin|sath|main|yaad|zindagi|pyaar|tenu|mera|rabba|apna|tujhe|kehte|lekin|rahen|chaho)\b/i;
+  if (!text) return true;
+  // Non-ASCII character ranges for scripts like Gurmukhi (\u0A00-\u0A7F), Devanagari (\u0900-\u097F), Urdu/Arabic (\u0600-\u06FF)
+  const hasNonLatinScript = /[\u0600-\u06FF\u0900-\u097F\u0A00-\u0A7F\u0B00-\u0B7F\u0C00-\u0C7F\u0D00-\u0D7F\u1100-\u11FF\u3000-\u9FFF]/;
+  if (hasNonLatinScript.test(text)) {
+    return false;
+  }
+
+  const nonEnglishIndicators = /\b(aur|hai|hoon|tum|meri|tere|dil|kya|nahin|sath|main|yaad|zindagi|pyaar|tenu|mera|rabba|apna|tujhe|kehte|lekin|rahen|chaho|sohniye|jaana|ishq|jatta|ve)\b/i;
   return !nonEnglishIndicators.test(text);
 }
 
 /**
- * Context-aware English Translation Engine with caching.
- * Translates line-by-line preserving timing and context.
+ * Context-aware English Translation Engine.
+ * Uses small safe batch sizes (4 lines per request) to prevent URL length HTTP errors on non-Latin scripts (Gurmukhi, Devanagari, etc.).
  */
 export async function translateLyricsToEnglish(
   songId: string,
   lines: SyncedLyricLine[],
   plainText?: string
 ): Promise<{ syncedTranslated: SyncedLyricLine[]; plainTranslated: string }> {
-  const contentToHash = plainText || lines.map((l) => l.text).join("\n");
+  const contentToHash = plainText || lines.map((l) => `${l.text}|${l.translation || ""}`).join("\n");
   const cacheKey = `musick_trans_${songId}_${simpleHash(contentToHash)}`;
 
-  // 1. Check LocalStorage Cache
+  // Check LocalStorage Cache
   try {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
@@ -244,30 +262,36 @@ export async function translateLyricsToEnglish(
         return parsed;
       }
     }
-  } catch (e) {
-    // Ignore storage quota/parsing errors
-  }
+  } catch (e) {}
 
-  // 2. Prepare text lines for translation
   const textArray = lines.length > 0 ? lines.map((l) => l.text) : (plainText || "").split("\n");
   const fullSample = textArray.slice(0, 10).join(" ");
 
-  // If text is already standard English, return unchanged
+  // Check if lines ALREADY have extracted parenthesized translations
+  const alreadyHasTranslations = lines.some((l) => l.translation && l.translation.length > 0);
+
+  if (alreadyHasTranslations) {
+    const syncedTranslated = lines.map((l) => ({
+      ...l,
+      translation: l.translation || l.text,
+    }));
+    const finalResult = { syncedTranslated, plainTranslated: plainText || "" };
+    try { localStorage.setItem(cacheKey, JSON.stringify(finalResult)); } catch {}
+    return finalResult;
+  }
+
   if (isEnglishText(fullSample)) {
     const result = {
-      syncedTranslated: lines.map((l) => ({ ...l, translation: l.text })),
+      syncedTranslated: lines.map((l) => ({ ...l, translation: l.translation || l.text })),
       plainTranslated: plainText || "",
     };
-    try {
-      localStorage.setItem(cacheKey, JSON.stringify(result));
-    } catch {}
+    try { localStorage.setItem(cacheKey, JSON.stringify(result)); } catch {}
     return result;
   }
 
   try {
-    // 3. Batch translate using Google GTX translation service (Free, context-aware)
-    // We send line-delimited chunks to translate preserve structure
-    const chunkSize = 20;
+    // Translate in small safe batches of 5 lines max to avoid HTTP GET URL overflow
+    const chunkSize = 5;
     const translatedLines: string[] = [];
 
     for (let i = 0; i < textArray.length; i += chunkSize) {
@@ -280,11 +304,9 @@ export async function translateLyricsToEnglish(
       if (res.ok) {
         const data = await res.json();
         if (data && data[0]) {
-          // GTX returns array of translated segments: [[["translated line", "original line", ...], ...]]
           const chunkTranslation = data[0].map((segment: any) => segment[0]).join("");
           const splitLines = chunkTranslation.split("\n");
-          
-          // Match array length
+
           chunk.forEach((orig, idx) => {
             const trans = splitLines[idx] ? splitLines[idx].trim() : orig;
             translatedLines.push(trans);
@@ -299,23 +321,18 @@ export async function translateLyricsToEnglish(
 
     const syncedTranslated: SyncedLyricLine[] = lines.map((line, idx) => ({
       ...line,
-      translation: translatedLines[idx] || line.text,
+      translation: line.translation || translatedLines[idx] || line.text,
     }));
 
     const plainTranslated = translatedLines.join("\n");
     const finalResult = { syncedTranslated, plainTranslated };
 
-    // Save to cache
-    try {
-      localStorage.setItem(cacheKey, JSON.stringify(finalResult));
-    } catch {}
-
+    try { localStorage.setItem(cacheKey, JSON.stringify(finalResult)); } catch {}
     return finalResult;
   } catch (err) {
     console.error("[lyricsService] Translation error:", err);
-    // Safety fallback: return original text as translation
     return {
-      syncedTranslated: lines.map((l) => ({ ...l, translation: l.text })),
+      syncedTranslated: lines.map((l) => ({ ...l, translation: l.translation || l.text })),
       plainTranslated: plainText || "",
     };
   }

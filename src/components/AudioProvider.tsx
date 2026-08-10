@@ -97,9 +97,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({
     audioEngine.setCallbacks({
       onTimeUpdate: (time) => {
         storeRef.current.setCurrentTime(time);
-        // Accumulate listen time for current session
-        if (currentListenSession && !currentListenSession.committed) {
-          currentListenSession.accumulatedSeconds = time;
+        if (currentListenSession) {
+          currentListenSession.accumulatedSeconds = Math.max(currentListenSession.accumulatedSeconds, time);
+          if (!currentListenSession.committed) {
+            const totalDur = storeRef.current.duration || 0;
+            maybeCommitHistory(currentListenSession, totalDur, userRef.current).catch(console.error);
+          }
         }
       },
       onDurationChange: (dur) => {

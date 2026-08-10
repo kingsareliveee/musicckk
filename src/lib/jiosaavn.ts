@@ -91,13 +91,18 @@ function normalizeSong(item: JioSongItem): Song {
       .filter(Boolean)
       .join(", ") || "Unknown Artist";
 
+  const songId = item.id || "";
+
   return {
-    videoId: item.id || "",
+    videoId: songId,
     title: item.name || "Unknown Title",
     artist,
     duration: secondsToDuration(toSeconds(item.duration)),
     thumbnail: pickImage(item.image),
     streamUrl: pickDownloadUrl(item.downloadUrl),
+    provider: "jiosaavn",
+    providerSongId: songId,
+    album: item.album?.name || "",
   };
 }
 

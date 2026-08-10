@@ -1,23 +1,22 @@
-import { useEffect, useRef } from 'react';
-import { supabase } from '../lib/supabase';
-import { useLibraryStore } from '../store/useLibraryStore';
-import type { Song } from '../store/usePlayerStore';
+import { useEffect, useRef } from "react";
+import { supabase } from "../lib/supabase";
+import { useLibraryStore } from "../store/useLibraryStore";
+import type { Song } from "../store/usePlayerStore";
+import { logStructuredError } from "../utils/logger";
 
-/** Convert "m:ss" or "h:mm:ss" duration string to total seconds (int). */
 function durationToSeconds(dur: string): number {
   if (!dur) return 0;
-  const parts = dur.split(':').map(Number);
+  const parts = dur.split(":").map(Number);
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
   if (parts.length === 2) return parts[0] * 60 + parts[1];
   return parts[0] || 0;
 }
 
-/** Convert integer seconds back to "m:ss" display string. */
 function secondsToDuration(sec: number | null | undefined): string {
-  if (!sec || sec <= 0) return '0:00';
+  if (!sec || sec <= 0) return "0:00";
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 export const useRecentlyPlayed = () => {
@@ -33,37 +32,44 @@ export const useRecentlyPlayed = () => {
     const fetchHistory = async () => {
       try {
         const { data, error } = await supabase
-          .from('recently_played')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('played_at', { ascending: false })
+          .from("recently_played")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("played_at", { ascending: false })
           .limit(20);
-          
+
         if (error) throw error;
-        
-        // Map rows to Song and deduplicate by song_id (keep most recent)
+
         const seen = new Set<string>();
         const history: Song[] = [];
-        for (const row of data) {
-          const vid = row.song_id;
+        for (const row of data || []) {
+          const vid = row.song_id || row.video_id;
           if (!vid || seen.has(vid)) continue;
           seen.add(vid);
           history.push({
             videoId: vid,
-            title: row.title,
-            artist: row.artist,
-            thumbnail: '', // remote table has no thumbnail column
+            title: row.title || "Unknown",
+            artist: row.artist || "Unknown",
+            thumbnail: row.thumbnail || "",
             duration: secondsToDuration(row.duration),
+            provider: row.provider || "jiosaavn",
+            providerSongId: vid,
           });
           if (history.length >= 50) break;
         }
         setRecentlyPlayed(history);
-        
+
         if (history.length > 0) {
           lastLoggedRef.current = history[0].videoId;
         }
-      } catch (err) {
-        console.error('Failed to fetch recently played:', err);
+      } catch (err: any) {
+        logStructuredError({
+          operation: "recently_played.fetch",
+          status: err?.status || 400,
+          code: err?.code || "FETCH_FAILED",
+          message: err?.message || "Failed to fetch recently played",
+          details: err,
+        });
       }
     };
 
@@ -75,14 +81,17 @@ export const useRecentlyPlayed = () => {
 
   const logPlay = async (song: Song) => {
     if (!user || !song) return;
-    const vid = (song as any).videoId || (song as any).id;
+    const vid = song.videoId || (song as any).id;
     if (!vid) return;
 
-    // Spam prevention: don't log if it's exactly the same song we just logged
     if (lastLoggedRef.current === vid) return;
 
-    // Ensure song has a videoId for store consistency
-    const songWithId = { ...song, videoId: vid } as Song;
+    const songWithId = {
+      ...song,
+      videoId: vid,
+      provider: song.provider || "jiosaavn",
+      providerSongId: vid,
+    } as Song;
 
     // Optimistic UI update
     addRecentlyPlayed(songWithId);
@@ -91,7 +100,7 @@ export const useRecentlyPlayed = () => {
     // Log to top_tracks locally
     try {
       const topTracks = JSON.parse(localStorage.getItem("musick-top-tracks") || "[]");
-      const idx = topTracks.findIndex((t: any) => t.video_id === vid);
+      const idx = topTracks.findIndex((t: any) => t.video_id === vid || t.id === vid);
       if (idx !== -1) {
         topTracks[idx].play_count += 1;
       } else {
@@ -102,28 +111,46 @@ export const useRecentlyPlayed = () => {
           artist: song.artist,
           thumbnail: song.thumbnail,
           play_count: 1,
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
         });
       }
       localStorage.setItem("musick-top-tracks", JSON.stringify(topTracks));
-    } catch (err) {
-      console.error('Failed to log top tracks locally:', err);
-    }
+    } catch {}
 
     try {
-      // Remove any existing rows for this user/video to avoid duplicates
       await supabase.from("recently_played").delete().match({ user_id: user.id, song_id: vid });
-      await supabase
+      const { error } = await supabase
         .from("recently_played")
         .insert({
           user_id: user.id,
           song_id: vid,
+          provider: song.provider || "jiosaavn",
+          video_id: vid,
           title: song.title || "Unknown",
           artist: song.artist || "Unknown",
+          thumbnail: song.thumbnail || "",
           duration: durationToSeconds(song.duration),
+          played_at: new Date().toISOString(),
         });
-    } catch (err) {
-      // Graceful fallback: local state & top-tracks already updated
+
+      if (error) {
+        logStructuredError({
+          operation: "recently_played.insert",
+          status: error.code === "23502" ? "NOT_NULL_VIOLATION" : 400,
+          code: error.code || "DB_INSERT_FAILED",
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
+      }
+    } catch (err: any) {
+      logStructuredError({
+        operation: "recently_played.insert_catch",
+        status: err?.status || 400,
+        code: err?.code || "DB_ERROR",
+        message: err?.message || "Insert exception",
+        details: err,
+      });
     }
   };
 

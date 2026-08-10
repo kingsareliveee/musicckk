@@ -2,19 +2,17 @@
  * listeningHistory.ts
  * -------------------
  * Pure Supabase operations for the listening_history table.
- * No React hooks here — import this from hooks or components.
  *
  * UPSERT strategy:
- *   Check for existing row → if found, increment play_count + update timestamp.
- *   This ensures one row per user-song pair with accurate play counts.
+ *   Check for existing row -> if found, increment play_count + update timestamp & listened_seconds.
+ *   Ensures one row per user-song pair with accurate play counts and completion state.
  *
  * Guest users get localStorage-backed history (key: "musick-guest-history").
  */
 
-import { supabase } from './supabase';
-import type { Song } from '../store/usePlayerStore';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { supabase } from "./supabase";
+import type { Song } from "../store/usePlayerStore";
+import { logStructuredError } from "../utils/logger";
 
 export interface HistoryEntry {
   id: string;
@@ -22,29 +20,25 @@ export interface HistoryEntry {
   title: string;
   artist: string;
   thumbnail: string;
-  duration: number;          // seconds
+  duration: number; // seconds
   play_count: number;
-  listened_at: string;       // ISO timestamp
+  listened_at: string; // ISO timestamp
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function durationToSeconds(dur: string | undefined): number {
   if (!dur) return 0;
-  const parts = dur.split(':').map(Number);
+  const parts = dur.split(":").map(Number);
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
   if (parts.length === 2) return parts[0] * 60 + parts[1];
   return parts[0] || 0;
 }
 
-// ─── Guest localStorage helpers ───────────────────────────────────────────────
-
-const GUEST_HISTORY_KEY = 'musick-guest-history';
+const GUEST_HISTORY_KEY = "musick-guest-history";
 const GUEST_MAX = 100;
 
 function guestLoad(): HistoryEntry[] {
   try {
-    return JSON.parse(localStorage.getItem(GUEST_HISTORY_KEY) || '[]');
+    return JSON.parse(localStorage.getItem(GUEST_HISTORY_KEY) || "[]");
   } catch {
     return [];
   }
@@ -53,14 +47,17 @@ function guestLoad(): HistoryEntry[] {
 function guestSave(entries: HistoryEntry[]) {
   try {
     localStorage.setItem(GUEST_HISTORY_KEY, JSON.stringify(entries.slice(0, GUEST_MAX)));
-  } catch { /* ignore quota errors */ }
+  } catch {}
 }
 
 export function guestUpsert(song: Song, _listenedSeconds: number): HistoryEntry[] {
   const entries = guestLoad();
   const now = new Date().toISOString();
   const dur = durationToSeconds(song.duration);
-  const idx = entries.findIndex(e => e.song_id === song.videoId);
+  const songId = song.videoId || (song as any).id;
+  if (!songId) return entries;
+
+  const idx = entries.findIndex((e) => e.song_id === songId);
 
   if (idx !== -1) {
     entries[idx].play_count += 1;
@@ -73,11 +70,11 @@ export function guestUpsert(song: Song, _listenedSeconds: number): HistoryEntry[
   }
 
   const newEntry: HistoryEntry = {
-    id: `guest-${song.videoId}`,
-    song_id: song.videoId,
-    title: song.title,
-    artist: song.artist,
-    thumbnail: song.thumbnail || '',
+    id: `guest-${songId}`,
+    song_id: songId,
+    title: song.title || "Unknown",
+    artist: song.artist || "Unknown",
+    thumbnail: song.thumbnail || "",
     duration: dur,
     play_count: 1,
     listened_at: now,
@@ -92,7 +89,7 @@ export function guestFetchAll(): HistoryEntry[] {
 }
 
 export function guestDelete(songId: string): HistoryEntry[] {
-  const updated = guestLoad().filter(e => e.song_id !== songId);
+  const updated = guestLoad().filter((e) => e.song_id !== songId);
   guestSave(updated);
   return updated;
 }
@@ -101,33 +98,39 @@ export function guestClear(): void {
   localStorage.removeItem(GUEST_HISTORY_KEY);
 }
 
-// ─── Supabase operations ──────────────────────────────────────────────────────
-
 /**
- * Record or increment a play. Called only after the 30s/50% threshold.
+ * Record or increment a play. Called when threshold (>=30s or >=50%) or onEnded is reached.
  */
 export async function upsertListeningHistory(
   userId: string,
   song: Song,
   listenedSeconds: number,
-  totalDurationSeconds: number,
+  totalDurationSeconds: number
 ): Promise<{ error: string | null }> {
-  if (!userId || !song?.videoId) return { error: "Missing userId or songId" };
+  const songId = song?.videoId || (song as any)?.id;
+  if (!userId || !songId) return { error: "Missing userId or songId" };
 
   const now = new Date().toISOString();
   const completed = totalDurationSeconds > 0 && listenedSeconds >= totalDurationSeconds * 0.8;
+  const provider = song.provider || "jiosaavn";
 
   try {
-    // Check for existing row
     const { data: existing, error: fetchErr } = await supabase
       .from("listening_history")
       .select("id, play_count, listened_seconds")
       .eq("user_id", userId)
-      .eq("song_id", song.videoId)
+      .eq("song_id", songId)
       .maybeSingle();
 
     if (fetchErr) {
-      console.warn("[listeningHistory] fetch check warning:", fetchErr.message);
+      logStructuredError({
+        operation: "listening_history.check_existing",
+        status: fetchErr.code || 400,
+        code: fetchErr.code,
+        message: fetchErr.message,
+        details: fetchErr.details,
+        hint: fetchErr.hint,
+      });
     }
 
     if (existing) {
@@ -139,43 +142,91 @@ export async function upsertListeningHistory(
           listened_at: now,
           completed: completed || false,
           thumbnail: song.thumbnail || null,
+          image_url: song.thumbnail || null,
+          provider,
         })
         .eq("id", existing.id);
 
-      if (updateErr) throw updateErr;
+      if (updateErr) {
+        logStructuredError({
+          operation: "listening_history.update",
+          status: updateErr.code || 400,
+          code: updateErr.code,
+          message: updateErr.message,
+          details: updateErr.details,
+          hint: updateErr.hint,
+        });
+        throw updateErr;
+      }
     } else {
+      const payload: Record<string, any> = {
+        user_id: userId,
+        song_id: songId,
+        provider,
+        title: song.title || "Unknown",
+        artist: song.artist || "Unknown",
+        album: song.album || null,
+        image_url: song.thumbnail || null,
+        thumbnail: song.thumbnail || null,
+        duration: totalDurationSeconds || 0,
+        listened_seconds: listenedSeconds || 0,
+        play_count: 1,
+        completed,
+        listened_at: now,
+      };
+
       const { error: insertErr } = await supabase
         .from("listening_history")
-        .insert({
-          user_id: userId,
-          song_id: song.videoId,
-          provider: "jiosaavn",
-          title: song.title || "Unknown",
-          artist: song.artist || "Unknown",
-          thumbnail: song.thumbnail || null,
-          duration: totalDurationSeconds || 0,
-          listened_seconds: listenedSeconds || 0,
-          play_count: 1,
-          completed,
-          listened_at: now,
+        .insert(payload);
+
+      if (insertErr) {
+        logStructuredError({
+          operation: "listening_history.insert",
+          status: insertErr.code || 400,
+          code: insertErr.code,
+          message: insertErr.message,
+          details: insertErr.details,
+          hint: insertErr.hint,
         });
 
-      if (insertErr) throw insertErr;
+        // Retry with minimal safe payload if remote schema has missing optional columns
+        const minimalPayload = {
+          user_id: userId,
+          song_id: songId,
+          provider,
+          title: song.title || "Unknown",
+          artist: song.artist || "Unknown",
+          duration: totalDurationSeconds || 0,
+          listened_seconds: listenedSeconds || 0,
+          completed,
+          listened_at: now,
+        };
+        const { error: retryErr } = await supabase
+          .from("listening_history")
+          .insert(minimalPayload);
+
+        if (retryErr) {
+          logStructuredError({
+            operation: "listening_history.insert_retry",
+            status: retryErr.code || 400,
+            code: retryErr.code,
+            message: retryErr.message,
+            details: retryErr.details,
+            hint: retryErr.hint,
+          });
+          throw retryErr;
+        }
+      }
     }
 
     return { error: null };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn("[listeningHistory] upsert fallback:", msg);
-    // Fallback to local guest history so play is never lost
     guestUpsert(song, listenedSeconds);
     return { error: msg };
   }
 }
 
-/**
- * Fetch history ordered by most recently played.
- */
 export async function fetchRecentHistory(
   userId: string,
   limit = 50
@@ -188,7 +239,17 @@ export async function fetchRecentHistory(
       .order("listened_at", { ascending: false })
       .limit(limit);
 
-    if (error) throw error;
+    if (error) {
+      logStructuredError({
+        operation: "listening_history.fetch_recent",
+        status: error.code || 400,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      throw error;
+    }
 
     const entries: HistoryEntry[] = (data || [])
       .filter((r: any) => r && (r.song_id || r.id))
@@ -210,9 +271,6 @@ export async function fetchRecentHistory(
   }
 }
 
-/**
- * Fetch history ordered by most played (highest play_count first).
- */
 export async function fetchMostPlayed(
   userId: string,
   limit = 20
@@ -225,7 +283,17 @@ export async function fetchMostPlayed(
       .order("play_count", { ascending: false })
       .limit(limit);
 
-    if (error) throw error;
+    if (error) {
+      logStructuredError({
+        operation: "listening_history.fetch_most_played",
+        status: error.code || 400,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      throw error;
+    }
 
     const entries: HistoryEntry[] = (data || [])
       .filter((r: any) => r && (r.song_id || r.id))
@@ -248,19 +316,16 @@ export async function fetchMostPlayed(
   }
 }
 
-/**
- * Delete a single history entry.
- */
 export async function deleteHistoryEntry(
   userId: string,
-  songId: string,
+  songId: string
 ): Promise<{ error: string | null }> {
   try {
     const { error } = await supabase
-      .from('listening_history')
+      .from("listening_history")
       .delete()
-      .eq('user_id', userId)
-      .eq('song_id', songId);
+      .eq("user_id", userId)
+      .eq("song_id", songId);
 
     if (error) throw error;
     return { error: null };
@@ -270,18 +335,9 @@ export async function deleteHistoryEntry(
   }
 }
 
-/**
- * Clear all history for a user.
- */
-export async function clearAllHistory(
-  userId: string,
-): Promise<{ error: string | null }> {
+export async function clearAllHistory(userId: string): Promise<{ error: string | null }> {
   try {
-    const { error } = await supabase
-      .from('listening_history')
-      .delete()
-      .eq('user_id', userId);
-
+    const { error } = await supabase.from("listening_history").delete().eq("user_id", userId);
     if (error) throw error;
     return { error: null };
   } catch (err: unknown) {

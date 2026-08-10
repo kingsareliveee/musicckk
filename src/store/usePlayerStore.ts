@@ -7,6 +7,9 @@ export interface Song {
   duration: string;
   thumbnail: string;
   streamUrl?: string;
+  provider?: string;
+  providerSongId?: string;
+  album?: string;
 }
 
 interface PlayerState {

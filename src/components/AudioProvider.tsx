@@ -99,10 +99,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({
         storeRef.current.setCurrentTime(time);
         if (currentListenSession) {
           currentListenSession.accumulatedSeconds = Math.max(currentListenSession.accumulatedSeconds, time);
-          if (!currentListenSession.committed) {
-            const totalDur = storeRef.current.duration || 0;
-            maybeCommitHistory(currentListenSession, totalDur, userRef.current).catch(console.error);
-          }
         }
       },
       onDurationChange: (dur) => {

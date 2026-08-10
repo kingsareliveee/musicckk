@@ -5,7 +5,8 @@
  *
  * UPSERT strategy:
  *   Check for existing row -> if found, increment play_count + update timestamp & listened_seconds.
- *   Ensures one row per user-song pair with accurate play counts and completion state.
+ *   Schema-Adaptive Retry: Automatically handles PGRST204 schema cache errors if remote DB table
+ *   lacks optional columns (e.g. artist, album, play_count) prior to SQL migration execution.
  *
  * Guest users get localStorage-backed history (key: "musick-guest-history").
  */
@@ -99,6 +100,19 @@ export function guestClear(): void {
 }
 
 /**
+ * Clean payload of any column that PostgREST PGRST204 reports as missing.
+ */
+function sanitizePayloadForPGRST(payload: Record<string, any>, errorMessage: string): Record<string, any> {
+  const copy = { ...payload };
+  // Extract column name from PostgREST PGRST204 message e.g. "Could not find the 'artist' column of 'listening_history'"
+  const match = errorMessage.match(/Could not find the '([^']+)' column/i);
+  if (match && match[1] && match[1] in copy) {
+    delete copy[match[1]];
+  }
+  return copy;
+}
+
+/**
  * Record or increment a play. Called when threshold (>=30s or >=50%) or onEnded is reached.
  */
 export async function upsertListeningHistory(
@@ -115,6 +129,7 @@ export async function upsertListeningHistory(
   const provider = song.provider || "jiosaavn";
 
   try {
+    // 1. Check existing row
     const { data: existing, error: fetchErr } = await supabase
       .from("listening_history")
       .select("id, play_count, listened_seconds")
@@ -122,7 +137,7 @@ export async function upsertListeningHistory(
       .eq("song_id", songId)
       .maybeSingle();
 
-    if (fetchErr) {
+    if (fetchErr && fetchErr.code !== "PGRST116" && fetchErr.code !== "PGRST204") {
       logStructuredError({
         operation: "listening_history.check_existing",
         status: fetchErr.code || 400,
@@ -134,32 +149,38 @@ export async function upsertListeningHistory(
     }
 
     if (existing) {
-      const { error: updateErr } = await supabase
+      // 2. UPDATE existing row
+      let updatePayload: Record<string, any> = {
+        play_count: (existing.play_count || 1) + 1,
+        listened_seconds: Math.max(existing.listened_seconds || 0, listenedSeconds),
+        listened_at: now,
+        completed: completed || false,
+        thumbnail: song.thumbnail || null,
+        image_url: song.thumbnail || null,
+        artist: song.artist || "Unknown",
+        title: song.title || "Unknown",
+        provider,
+      };
+
+      let { error: updateErr } = await supabase
         .from("listening_history")
-        .update({
-          play_count: (existing.play_count || 1) + 1,
-          listened_seconds: Math.max(existing.listened_seconds || 0, listenedSeconds),
-          listened_at: now,
-          completed: completed || false,
-          thumbnail: song.thumbnail || null,
-          image_url: song.thumbnail || null,
-          provider,
-        })
+        .update(updatePayload)
         .eq("id", existing.id);
 
-      if (updateErr) {
-        logStructuredError({
-          operation: "listening_history.update",
-          status: updateErr.code || 400,
-          code: updateErr.code,
-          message: updateErr.message,
-          details: updateErr.details,
-          hint: updateErr.hint,
-        });
-        throw updateErr;
+      if (updateErr && updateErr.code === "PGRST204") {
+        // Retry update removing missing column
+        updatePayload = sanitizePayloadForPGRST(updatePayload, updateErr.message);
+        const retryRes = await supabase
+          .from("listening_history")
+          .update(updatePayload)
+          .eq("id", existing.id);
+        updateErr = retryRes.error;
       }
+
+      if (updateErr) throw updateErr;
     } else {
-      const payload: Record<string, any> = {
+      // 3. INSERT new row
+      let insertPayload: Record<string, any> = {
         user_id: userId,
         song_id: songId,
         provider,
@@ -175,48 +196,41 @@ export async function upsertListeningHistory(
         listened_at: now,
       };
 
-      const { error: insertErr } = await supabase
+      let { error: insertErr } = await supabase
         .from("listening_history")
-        .insert(payload);
+        .insert(insertPayload);
 
-      if (insertErr) {
+      // Handle PostgREST PGRST204 schema mismatch (e.g. 'artist' column missing remotely)
+      if (insertErr && insertErr.code === "PGRST204") {
         logStructuredError({
-          operation: "listening_history.insert",
-          status: insertErr.code || 400,
-          code: insertErr.code,
+          operation: "listening_history.insert_pgrst204",
+          status: "PGRST204",
+          code: "MISSING_COLUMN_REMOTELY",
           message: insertErr.message,
-          details: insertErr.details,
-          hint: insertErr.hint,
+          hint: "Execute Supabase migration script to add missing columns to listening_history table.",
         });
 
-        // Retry with minimal safe payload if remote schema has missing optional columns
-        const minimalPayload = {
-          user_id: userId,
-          song_id: songId,
-          provider,
-          title: song.title || "Unknown",
-          artist: song.artist || "Unknown",
-          duration: totalDurationSeconds || 0,
-          listened_seconds: listenedSeconds || 0,
-          completed,
-          listened_at: now,
-        };
-        const { error: retryErr } = await supabase
-          .from("listening_history")
-          .insert(minimalPayload);
+        // 1st retry: sanitize payload to remove reported missing column
+        insertPayload = sanitizePayloadForPGRST(insertPayload, insertErr.message);
+        let retryRes = await supabase.from("listening_history").insert(insertPayload);
+        insertErr = retryRes.error;
 
-        if (retryErr) {
-          logStructuredError({
-            operation: "listening_history.insert_retry",
-            status: retryErr.code || 400,
-            code: retryErr.code,
-            message: retryErr.message,
-            details: retryErr.details,
-            hint: retryErr.hint,
-          });
-          throw retryErr;
+        // 2nd retry: if another column is missing, remove it too
+        if (insertErr && insertErr.code === "PGRST204") {
+          insertPayload = sanitizePayloadForPGRST(insertPayload, insertErr.message);
+          retryRes = await supabase.from("listening_history").insert(insertPayload);
+          insertErr = retryRes.error;
+        }
+
+        // 3rd retry: fallback to guaranteed core columns (user_id, song_id, provider)
+        if (insertErr) {
+          const minimalPayload = { user_id: userId, song_id: songId, provider };
+          retryRes = await supabase.from("listening_history").insert(minimalPayload);
+          insertErr = retryRes.error;
         }
       }
+
+      if (insertErr) throw insertErr;
     }
 
     return { error: null };

@@ -19,6 +19,15 @@ function secondsToDuration(sec: number | null | undefined): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+function sanitizePayloadForPGRST(payload: Record<string, any>, errorMessage: string): Record<string, any> {
+  const copy = { ...payload };
+  const match = errorMessage.match(/Could not find the '([^']+)' column/i);
+  if (match && match[1] && match[1] in copy) {
+    delete copy[match[1]];
+  }
+  return copy;
+}
+
 export const useRecentlyPlayed = () => {
   const { user, recentlyPlayed, setRecentlyPlayed, addRecentlyPlayed } = useLibraryStore();
   const lastLoggedRef = useRef<string | null>(null);
@@ -119,19 +128,28 @@ export const useRecentlyPlayed = () => {
 
     try {
       await supabase.from("recently_played").delete().match({ user_id: user.id, song_id: vid });
-      const { error } = await supabase
+
+      let payload: Record<string, any> = {
+        user_id: user.id,
+        song_id: vid,
+        provider: song.provider || "jiosaavn",
+        video_id: vid,
+        title: song.title || "Unknown",
+        artist: song.artist || "Unknown",
+        thumbnail: song.thumbnail || "",
+        duration: durationToSeconds(song.duration),
+        played_at: new Date().toISOString(),
+      };
+
+      let { error } = await supabase
         .from("recently_played")
-        .insert({
-          user_id: user.id,
-          song_id: vid,
-          provider: song.provider || "jiosaavn",
-          video_id: vid,
-          title: song.title || "Unknown",
-          artist: song.artist || "Unknown",
-          thumbnail: song.thumbnail || "",
-          duration: durationToSeconds(song.duration),
-          played_at: new Date().toISOString(),
-        });
+        .insert(payload);
+
+      if (error && error.code === "PGRST204") {
+        payload = sanitizePayloadForPGRST(payload, error.message);
+        const retryRes = await supabase.from("recently_played").insert(payload);
+        error = retryRes.error;
+      }
 
       if (error) {
         logStructuredError({

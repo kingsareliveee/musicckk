@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { Home, Search, Library, LogIn, LogOut, Plus, Music } from "lucide-react";
+import { Home, Search, Library, LogIn, LogOut, Plus, Music, Settings } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "../utils/cn";
 import { useAuth } from "../hooks/useAuth";
@@ -42,6 +42,7 @@ export const Sidebar: React.FC = () => {
         <NavItem to="/" icon={<Home className="w-[18px] h-[18px]" />} label="Home" />
         <NavItem to="/search" icon={<Search className="w-[18px] h-[18px]" />} label="Search" />
         <NavItem to="/library" icon={<Library className="w-[18px] h-[18px]" />} label="Library" />
+        <NavItem to="/settings" icon={<Settings className="w-[18px] h-[18px]" />} label="Settings" />
       </nav>
 
       {/* Divider */}

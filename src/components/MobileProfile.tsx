@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { LogIn, LogOut, User as UserIcon } from "lucide-react";
+import { LogIn, LogOut, User as UserIcon, Settings as SettingsIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
@@ -94,6 +94,20 @@ export const MobileProfile: React.FC = () => {
                   Sign in
                 </motion.button>
               </div>
+            )}
+
+            {/* Settings link */}
+            {user && (
+              <button
+                onClick={() => { setIsOpen(false); navigate("/settings"); }}
+                className="w-full text-left px-4 py-3 text-sm flex items-center gap-2.5 transition-colors"
+                style={{ color: "rgba(255,255,255,0.75)" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <SettingsIcon className="w-4 h-4" />
+                Settings
+              </button>
             )}
 
             {/* Theme switcher */}

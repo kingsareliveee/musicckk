@@ -8,6 +8,7 @@ import { Search } from "./pages/Search";
 import { Library } from "./pages/Library";
 import { SongDetail } from "./pages/SongDetail";
 import { LikedSongs } from "./pages/LikedSongs";
+import { Settings } from "./pages/Settings";
 import { PlaylistDetail } from "./pages/PlaylistDetail";
 import { Login, GUEST_MODE_KEY } from "./pages/Login";
 import { Signup } from "./pages/Signup";
@@ -211,6 +212,7 @@ function AppInner() {
               <Route path="library/liked" element={<LikedSongs />} />
               <Route path="playlist/:id" element={<PlaylistDetail />} />
               <Route path="song/:videoId" element={<SongDetail />} />
+              <Route path="settings" element={<Settings />} />
               <Route path="home" element={<Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

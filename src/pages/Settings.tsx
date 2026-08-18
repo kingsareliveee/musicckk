@@ -127,14 +127,11 @@ export const Settings: React.FC = () => {
       <div className="min-h-full pb-4">
         {/* Sticky Header */}
         <div
-          className="sticky top-0 z-40 flex items-center gap-3 px-0 py-4 mb-2"
+          className="sticky top-0 z-40 flex items-center gap-3 py-4 mb-4"
           style={{
-            background: "rgba(0,0,0,0.85)",
+            background: "rgba(0,0,0,0.88)",
             backdropFilter: "blur(24px)",
-            marginLeft: "-20px",
-            marginRight: "-20px",
-            paddingLeft: "20px",
-            paddingRight: "20px",
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
           }}
         >
           <motion.button
